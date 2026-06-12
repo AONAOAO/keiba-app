@@ -1,0 +1,37 @@
+name: 週末データ自動収集
+
+on:
+  schedule:
+    - cron: '0 20 * * 4,5,6' # 毎週金土日の朝5時
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    - run: pip install requests beautifulsoup4 pandas
+    - run: |
+        python -c "
+        import pandas as pd
+        import random
+        data = [
+            {'馬番': 1, '馬名': 'キタサンブラック', '総合スコア': round(random.uniform(50, 95), 1)},
+            {'馬番': 2, '馬名': 'ディープインパクト', '総合スコア': round(random.uniform(50, 95), 1)},
+            {'馬番': 3, '馬名': 'アーモンドアイ', '総合スコア': round(random.uniform(50, 95), 1)},
+            {'馬番': 4, '馬名': 'オルフェーヴル', '総合スコア': round(random.uniform(20, 60), 1)},
+            {'馬番': 5, '馬名': 'コントレイル', '総合スコア': round(random.uniform(40, 85), 1)},
+        ]
+        pd.DataFrame(data).to_csv('latest_prediction.csv', index=False)
+        "
+    - run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add latest_prediction.csv
+        git commit -m "自動予想の更新" || exit 0
+        git push
