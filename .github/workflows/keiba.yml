@@ -2,7 +2,7 @@ name: 週末データ自動収集
 
 on:
   schedule:
-    - cron: '30 2 * * 6,0' # 土日の11:30に本物のオッズと印を取得
+    - cron: '30 2 * * 6,0'
   workflow_dispatch:
 
 jobs:
@@ -19,7 +19,7 @@ jobs:
     - name: 必要な道具をインストール
       run: pip install requests beautifulsoup4 pandas lxml
 
-    - name: 100%リアルデータ（前走・枠順・印・オッズ・騎手）の最強ロジック
+    - name: 100%リアルデータの最強ロジック（オッズ絶対取得版）
       run: |
         python -c "
         import requests
@@ -53,38 +53,38 @@ jobs:
                 horse_rows = soup_race.find_all('tr', class_='HorseList')
                 
                 for row in horse_rows:
-                    row_text = row.text # この馬に関する全ての文字データ
+                    row_text = row.text
                     
-                    # 1. 馬名
+                    # 馬名
                     name_tag = row.find('span', class_='HorseName')
                     if not name_tag: name_tag = row.find('td', class_='Horse_Name')
                     name = name_tag.text.strip() if name_tag else ''
                     
-                    # 2. 馬番
+                    # 馬番
                     num_tag = row.find('td', class_=re.compile(r'(Umaban|Num)'))
                     num_text = num_tag.text.strip() if num_tag else ''
                     try: horse_num = int(num_text)
                     except: horse_num = 99
                     
-                    # 3. 騎手
+                    # 騎手
                     jockey_tag = row.find('td', class_='Jockey')
                     jockey = ''
                     if jockey_tag:
                         j_a = jockey_tag.find('a')
                         jockey = j_a.text.strip() if j_a else re.sub(r'[0-9\.]', '', jockey_tag.text).strip()
 
-                    # 4. 本物のオッズ
+                    # 【重要】オッズを後ろから探す最強ロジックに戻す
                     odds = 99.9
-                    odds_tag = row.find('td', class_='Odds')
-                    if odds_tag:
-                        match = re.search(r'([0-9.]+)', odds_tag.text.strip())
-                        if match: odds = float(match.group(1))
+                    tds = row.find_all('td')
+                    for td in reversed(tds):
+                        txt = td.text.strip()
+                        if re.match(r'^\d+\.\d+$', txt):
+                            odds = float(txt)
+                            break
 
                     if name and name != '馬名':
-                        # 基礎点（フラットな50点からスタート）
                         base_score = 50.0
                         
-                        # 【リアル加点①】騎手とオッズ
                         if any(k in jockey for k in ['ルメール', '川田']): base_score += 15
                         elif any(k in jockey for k in ['武豊', '戸崎', '坂井']): base_score += 10
                         elif any(k in jockey for k in ['松山', '横山武', 'モレイラ', 'レーン']): base_score += 8
@@ -94,16 +94,13 @@ jobs:
                         elif odds < 10.0: base_score += 5
                         elif odds > 30.0: base_score -= 5
 
-                        # 【リアル加点②】枠順（内枠有利・外枠不利）
                         if horse_num <= 6: base_score += 5
                         elif horse_num >= 15: base_score -= 3
 
-                        # 【リアル加点③】前走成績（テキスト内に1着等の文字があるか）
                         if '1着' in row_text: base_score += 10
                         elif '2着' in row_text: base_score += 5
                         elif '3着' in row_text: base_score += 3
 
-                        # 【リアル加点④】本物の予想印（ページ内の◎◯▲をカウント）
                         mark_bonus = 0
                         mark_bonus += row_text.count('◎') * 7
                         mark_bonus += row_text.count('◯') * 5
@@ -128,10 +125,7 @@ jobs:
             ]
 
         df = pd.DataFrame(real_data)
-        
-        # 総合スコアが高い順に並び替え（ランキング化）
         df = df.sort_values(by='総合スコア', ascending=False).reset_index(drop=True)
-
         df.to_csv('latest_prediction.csv', index=False)
         "
 
@@ -140,5 +134,5 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add latest_prediction.csv
-        git commit -m "100%リアルデータ（前走・枠順・印）の全部のせ実装" || exit 0
+        git commit -m "オッズ取得の修正（後ろから検索）" || exit 0
         git push
