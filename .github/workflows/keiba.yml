@@ -19,7 +19,7 @@ jobs:
     - name: 必要な道具をインストール
       run: pip install requests beautifulsoup4 pandas lxml
 
-    - name: 騎手とオッズを考慮した本格予想ロジック
+    - name: 騎手と想定オッズを考慮した本格予想ロジック
       run: |
         python -c "
         import requests
@@ -70,49 +70,51 @@ jobs:
                         j_a = jockey_tag.find('a')
                         jockey = j_a.text.strip() if j_a else re.sub(r'[0-9\.]', '', jockey_tag.text).strip()
 
-                    # 【超修正ポイント】オッズを確実に抜き出す
-                    odds = 99.9
-                    tds = row.find_all('td')
-                    # 表の後ろ（右側）から順番に「小数点を含む数字」を探す（斤量と間違えないため）
-                    for td in reversed(tds):
-                        txt = td.text.strip()
-                        # '2.5' や '12.3' のような数字の形にピッタリ一致するかチェック
-                        if re.match(r'^\d+\.\d+$', txt):
-                            odds = float(txt)
-                            break
-
                     if name and name != '馬名':
-                        base_score = round(random.uniform(40, 55), 1)
+                        base_score = round(random.uniform(45, 55), 1)
                         
                         j_bonus = 0
                         if any(k in jockey for k in ['ルメール', '川田']): j_bonus = 15
                         elif any(k in jockey for k in ['武豊', '戸崎', '坂井']): j_bonus = 10
                         elif any(k in jockey for k in ['松山', '横山武', 'モレイラ', 'レーン']): j_bonus = 8
                         elif any(k in jockey for k in ['岩田望', '鮫島克', '西村淳']): j_bonus = 5
-                        
-                        o_bonus = 0
-                        if odds < 5.0: o_bonus = 10
-                        elif odds < 10.0: o_bonus = 5
-                        elif odds > 30.0: o_bonus = -5
 
                         real_data.append({
                             '馬番': int(num_text) if num_text.isdigit() else len(real_data) + 1,
                             '馬名': name,
                             '騎手': jockey,
-                            'オッズ': odds,
-                            'データスコア': base_score + j_bonus + o_bonus
+                            'base': base_score + j_bonus
                         })
         except Exception as e:
             print(f'エラー発生: {e}')
 
         if not real_data:
             real_data = [
-                {'馬番': 1, '馬名': 'ドウデュース', '騎手': '武豊', 'オッズ': 2.5, 'データスコア': 75.0},
-                {'馬番': 2, '馬名': 'リバティアイランド', '騎手': '川田将雅', 'オッズ': 3.0, 'データスコア': 70.0},
+                {'馬番': 1, '馬名': 'ドウデュース', '騎手': '武豊', 'base': 65.0},
+                {'馬番': 2, '馬名': 'リバティアイランド', '騎手': '川田将雅', 'base': 70.0},
             ]
 
         df = pd.DataFrame(real_data)
+        
+        # 【ここが凄い】強さ(base)順に並び替えて、リアルな想定オッズを上から自動で割り振る
+        df = df.sort_values(by='base', ascending=False).reset_index(drop=True)
+        odds_list = []
+        current_odds = random.uniform(1.8, 3.2) # 1番人気はだいたい2倍前後のリアルな数値
+        for i in range(len(df)):
+            odds_list.append(round(current_odds, 1))
+            if i < 3:
+                current_odds += random.uniform(1.2, 3.5)
+            elif i < 7:
+                current_odds += random.uniform(4.0, 8.0)
+            else:
+                current_odds += random.uniform(10.0, 25.0) # 下位の穴馬ほどオッズが跳ね上がる
+                
+        df['オッズ'] = odds_list
+        
+        # オッズの人気度をデータスコアに最終加算
+        df['データスコア'] = df['base'] + df['オッズ'].apply(lambda o: 10 if o < 5.0 else (5 if o < 10.0 else -5))
 
+        # SNS評価点の合算
         sns_bonus_points = {}
         for umaban in df['馬番']:
             tweets_count = random.randint(0, 5)
@@ -120,6 +122,10 @@ jobs:
 
         df['SNS評価点'] = df['馬番'].map(sns_bonus_points)
         df['総合スコア'] = df['データスコア'] + df['SNS評価点']
+        
+        # 元の馬番順に戻し、不要な一時列を消して保存
+        df = df.sort_values(by='馬番').reset_index(drop=True)
+        df = df.drop(columns=['base'])
 
         df.to_csv('latest_prediction.csv', index=False)
         "
@@ -129,5 +135,5 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add latest_prediction.csv
-        git commit -m "オッズ取得のバグ修正" || exit 0
+        git commit -m "想定オッズ逆算システムの導入" || exit 0
         git push
