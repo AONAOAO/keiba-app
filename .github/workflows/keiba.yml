@@ -63,38 +63,37 @@ jobs:
                     num_tag = row.find('td', class_=re.compile(r'(Umaban|Num)'))
                     num_text = num_tag.text.strip() if num_tag else ''
                     
-                    # 【追加1】騎手の取得
+                    # 騎手の取得
                     jockey_tag = row.find('td', class_='Jockey')
                     jockey = ''
                     if jockey_tag:
                         j_a = jockey_tag.find('a')
                         jockey = j_a.text.strip() if j_a else re.sub(r'[0-9\.]', '', jockey_tag.text).strip()
 
-                    # 【追加2】オッズの取得
-                    odds_tag = row.find('td', class_='Odds')
-                    odds = 99.9 # オッズが未発表の場合は一旦99.9倍とする
-                    if odds_tag and odds_tag.text.strip() and odds_tag.text.strip() != '---':
-                        odds_match = re.search(r'([0-9.]+)', odds_tag.text)
-                        if odds_match:
-                            try: odds = float(odds_match.group(1))
-                            except: pass
+                    # 【超修正ポイント】オッズを確実に抜き出す
+                    odds = 99.9
+                    tds = row.find_all('td')
+                    # 表の後ろ（右側）から順番に「小数点を含む数字」を探す（斤量と間違えないため）
+                    for td in reversed(tds):
+                        txt = td.text.strip()
+                        # '2.5' や '12.3' のような数字の形にピッタリ一致するかチェック
+                        if re.match(r'^\d+\.\d+$', txt):
+                            odds = float(txt)
+                            break
 
                     if name and name != '馬名':
-                        # 【強化ロジック】ベース点数を基礎にしつつ、騎手とオッズで加点・減点する
                         base_score = round(random.uniform(40, 55), 1)
                         
-                        # 騎手ボーナス
                         j_bonus = 0
                         if any(k in jockey for k in ['ルメール', '川田']): j_bonus = 15
                         elif any(k in jockey for k in ['武豊', '戸崎', '坂井']): j_bonus = 10
                         elif any(k in jockey for k in ['松山', '横山武', 'モレイラ', 'レーン']): j_bonus = 8
                         elif any(k in jockey for k in ['岩田望', '鮫島克', '西村淳']): j_bonus = 5
                         
-                        # オッズボーナス
                         o_bonus = 0
-                        if odds < 5.0: o_bonus = 10     # 人気馬は手堅いのでプラス
+                        if odds < 5.0: o_bonus = 10
                         elif odds < 10.0: o_bonus = 5
-                        elif odds > 30.0: o_bonus = -5  # 大穴は少しマイナス（SNSで◎がつけば逆転可能）
+                        elif odds > 30.0: o_bonus = -5
 
                         real_data.append({
                             '馬番': int(num_text) if num_text.isdigit() else len(real_data) + 1,
@@ -103,22 +102,17 @@ jobs:
                             'オッズ': odds,
                             'データスコア': base_score + j_bonus + o_bonus
                         })
-                        
-                print(f'本格予想ロジックで {len(real_data)} 頭のデータを取得しました！')
         except Exception as e:
             print(f'エラー発生: {e}')
 
-        # セーフティ
         if not real_data:
             real_data = [
                 {'馬番': 1, '馬名': 'ドウデュース', '騎手': '武豊', 'オッズ': 2.5, 'データスコア': 75.0},
                 {'馬番': 2, '馬名': 'リバティアイランド', '騎手': '川田将雅', 'オッズ': 3.0, 'データスコア': 70.0},
-                {'馬番': 3, '馬名': 'イクイノックス', '騎手': 'ルメール', 'オッズ': 1.5, 'データスコア': 80.0},
             ]
 
         df = pd.DataFrame(real_data)
 
-        # SNS評価点の合算（最大+25点）
         sns_bonus_points = {}
         for umaban in df['馬番']:
             tweets_count = random.randint(0, 5)
@@ -135,5 +129,5 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add latest_prediction.csv
-        git commit -m "騎手・オッズ考慮の本格予想ロジックに更新" || exit 0
+        git commit -m "オッズ取得のバグ修正" || exit 0
         git push
