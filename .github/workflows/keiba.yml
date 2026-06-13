@@ -19,19 +19,19 @@ jobs:
     - name: 必要な道具をインストール
       run: pip install requests beautifulsoup4 pandas lxml
 
-    - name: 出馬表とオッズページを合体させる完全リアル予想ロジック
+    - name: 裏口APIを使用した完全無欠のオッズ統合ロジック
       run: |
         python -c "
         import requests
         from bs4 import BeautifulSoup
         import pandas as pd
         import re
+        import json
 
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         real_data = []
         
         try:
-            # レースID（12桁の数字）を探す
             res = requests.get('https://race.netkeiba.com/top/race_list.html', headers=headers)
             res.encoding = 'euc-jp'
             race_ids = re.findall(r'race_id=(\d{12})', res.text)
@@ -43,32 +43,36 @@ jobs:
 
             if race_ids:
                 race_ids = list(dict.fromkeys(race_ids))
-                target_race_id = race_ids[-1] # メインレースのID
+                target_race_id = race_ids[-1]
                 
                 # ----------------------------------------------------
-                # 【新兵器】まずは「オッズ専用ページ」から本物の単勝オッズを回収して辞書を作る
+                # 【極秘新兵器】netkeibaの裏口（JSON API）から本物のオッズを引っこ抜く！
                 # ----------------------------------------------------
-                odds_url = f'https://race.netkeiba.com/odds/index.html?race_id={target_race_id}'
-                print(f'オッズ取得URL: {odds_url}')
-                res_odds = requests.get(odds_url, headers=headers)
-                res_odds.encoding = 'euc-jp'
-                soup_odds = BeautifulSoup(res_odds.text, 'html.parser')
+                api_url = f'https://race.netkeiba.com/api/api_get_jra_odds.html?race_id={target_race_id}&type=1&action=init'
+                print(f'裏口API突撃URL: {api_url}')
+                res_api = requests.get(api_url, headers=headers)
                 
                 odds_dict = {}
-                for tr in soup_odds.find_all('tr'):
-                    td_num = tr.find('td', class_=re.compile(r'(Umaban|num)', re.I))
-                    td_odds = tr.find('td', class_=re.compile(r'(Tansho|Odds)', re.I))
-                    if td_num and td_odds:
-                        num_txt = td_num.text.strip()
-                        odds_txt = td_odds.text.strip()
-                        match = re.search(r'([0-9.]+)', odds_txt)
-                        if num_txt.isdigit() and match:
-                            odds_dict[int(num_txt)] = float(match.group(1))
+                try:
+                    # APIから直接電子データをパースする
+                    api_data = res_api.json()
+                    odds_info = api_data.get('data', {}).get('odds', {}).get('1', {})
+                    for umaban_str, odds_list in odds_info.items():
+                        if isinstance(odds_list, list) and len(odds_list) > 0:
+                            odds_dict[int(umaban_str)] = float(odds_list[0])
+                except Exception as e:
+                    print(f'APIパースエラー: {e}')
+                    
+                # セーフティ：もし通常ルートで取れなかったら、データの中から正規表現で強引に抜き出す
+                if not odds_dict:
+                    matches = re.findall(r'\"(\d+)\"\:\[\"([0-9.]+)\"', res_api.text)
+                    for umaban_str, odds_val in matches:
+                        odds_dict[int(umaban_str)] = float(odds_val)
                 
                 print(f'オッズデータの回収完了: {len(odds_dict)}頭分')
 
                 # ----------------------------------------------------
-                # 次に「出馬表ページ」から馬名や騎手、前走、プロの印を回収
+                # 「出馬表ページ」から馬名や騎手、前走、プロの印を回収
                 # ----------------------------------------------------
                 target_url = f'https://race.netkeiba.com/race/shutuba.html?race_id={target_race_id}'
                 print(f'出馬表取得URL: {target_url}')
@@ -81,51 +85,43 @@ jobs:
                 for row in horse_rows:
                     row_text = row.text
                     
-                    # 馬名
                     name_tag = row.find('span', class_='HorseName')
                     if not name_tag: name_tag = row.find('td', class_='Horse_Name')
                     name = name_tag.text.strip() if name_tag else ''
                     
-                    # 馬番
                     num_tag = row.find('td', class_=re.compile(r'(Umaban|Num)'))
                     num_text = num_tag.text.strip() if num_tag else ''
                     try: horse_num = int(num_text)
                     except: horse_num = 99
                     
-                    # 騎手
                     jockey_tag = row.find('td', class_='Jockey')
                     jockey = ''
                     if jockey_tag:
                         j_a = jockey_tag.find('a')
                         jockey = j_a.text.strip() if j_a else re.sub(r'[0-9\.]', '', jockey_tag.text).strip()
 
-                    # 【ここでドッキング！】オッズ専用ページから、この馬番の「本物のオッズ」を引っ張ってくる
+                    # 【完璧なドッキング】裏口APIで取った正確なオッズを合体！
                     odds = odds_dict.get(horse_num, 99.9)
 
                     if name and name != '馬名':
                         base_score = 50.0
                         
-                        # リアル加点①：騎手
                         if any(k in jockey for k in ['ルメール', '川田']): base_score += 15
                         elif any(k in jockey for k in ['武豊', '戸崎', '坂井']): base_score += 10
                         elif any(k in jockey for k in ['松山', '横山武', 'モレイラ', 'レーン']): base_score += 8
                         elif any(k in jockey for k in ['岩田望', '鮫島克', '西村淳']): base_score += 5
                         
-                        # リアル加点②：本物のオッズ
                         if odds < 5.0: base_score += 10
                         elif odds < 10.0: base_score += 5
                         elif odds > 30.0: base_score -= 5
 
-                        # リアル加点③：枠順（内枠有利・外枠不利）
                         if horse_num <= 6: base_score += 5
                         elif horse_num >= 15: base_score -= 3
 
-                        # リアル加点④：前走成績
                         if '1着' in row_text: base_score += 10
                         elif '2着' in row_text: base_score += 5
                         elif '3着' in row_text: base_score += 3
 
-                        # リアル加点⑤：本物のプロの予想印
                         mark_bonus = 0
                         mark_bonus += row_text.count('◎') * 7
                         mark_bonus += row_text.count('◯') * 5
@@ -159,5 +155,5 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add latest_prediction.csv
-        git commit -m "ツインエンジン方式による本物オッズ完全統合" || exit 0
+        git commit -m "裏口APIによる完全無欠のオッズ統合" || exit 0
         git push
