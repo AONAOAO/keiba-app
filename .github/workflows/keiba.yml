@@ -2,7 +2,7 @@ name: 週末データ自動収集
 
 on:
   schedule:
-    - cron: '0 20 * * 4,5,6' # 毎週金土日の朝5時（日本時間）に自動実行
+    - cron: '0 20 * * 4,5,6' # 毎週金土日の朝5時に自動実行
   workflow_dispatch: # 手動実行ボタン
 
 jobs:
@@ -28,66 +28,66 @@ jobs:
         import re
         import random
 
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         real_data = []
         
         try:
-            # 【改良ポイント】netkeibaの「今日のレース一覧（開催スケジュール）」ページを直接見に行きます
-            url = 'https://race.netkeiba.com/top/race_list.html'
-            res = requests.get(url, headers=headers)
+            # 1. まずは今日の開催一覧ページから「レースID（12桁の数字）」だけを執念で探す
+            res = requests.get('https://race.netkeiba.com/top/', headers=headers)
             res.encoding = 'euc-jp'
-            soup = BeautifulSoup(res.text, 'html.parser')
             
-            # ページ内にある、出馬表（shutuba.html）へのリンクをすべて探す
-            links = [a['href'] for a in soup.find_all('a', href=True) if 'shutuba.html?' in a['href']]
+            # HTMLの中から12桁のレースIDをすべてぶっこ抜く
+            race_ids = re.findall(r'race_id=(\d{12})', res.text)
             
-            if links:
-                # 調整中になりにくいように、一番注目度の高い「後半のレース（メインレース等）」のリンクを狙います
-                # 複数あるリンクの中から、確実に出馬表が確定していそうなものを選択
-                target_link = links[-1] if len(links) > 5 else links[0]
+            if not race_ids:
+                res = requests.get('https://race.netkeiba.com/top/race_list.html', headers=headers)
+                res.encoding = 'euc-jp'
+                race_ids = re.findall(r'race_id=(\d{12})', res.text)
+
+            if race_ids:
+                # 重複を消す
+                race_ids = list(dict.fromkeys(race_ids))
+                # 最後のほう（11Rなどのメインレース）のIDを選ぶ
+                target_race_id = race_ids[-1]
+                target_url = f'https://race.netkeiba.com/race/shutuba.html?race_id={target_race_id}'
                 
-                # 絶対URLに変換
-                if not target_link.startswith('http'):
-                    target_url = 'https://race.netkeiba.com/race/' + target_link.lstrip('../')
-                else:
-                    target_url = target_link
-                
-                print(f'ターゲットURL: {target_url}')
-                
+                print(f'ターゲットURLに突撃します: {target_url}')
                 res_race = requests.get(target_url, headers=headers)
                 res_race.encoding = 'euc-jp'
                 soup_race = BeautifulSoup(res_race.text, 'html.parser')
                 
-                # 馬名と馬番を抽出
-                names = [a.text.strip() for a in soup_race.find_all('span', class_='HorseName')]
-                numbers = [td.text.strip() for td in soup_race.find_all('td', class_=re.compile(r'Umaban'))]
+                # 馬名の取得（いろんなパターンのタグに対応）
+                names = []
+                for span in soup_race.find_all('span', class_='HorseName'):
+                    if span.text.strip(): names.append(span.text.strip())
                 
-                # もし上記で取れない場合の別パターン（netkeibaの仕様変更対策）
-                if not names:
-                    names = [td.text.strip() for td in soup_race.find_all('td', class_='Horse_Name')]
+                # 馬番の取得
+                numbers = []
+                for td in soup_race.find_all('td', class_=re.compile(r'(Umaban|Num)')):
+                    if td.text.strip().isdigit(): numbers.append(int(td.text.strip()))
                 
-                if names and len(numbers) >= len(names):
-                    for i, name in enumerate(names):
-                        if name: # 空白じゃなければ追加
-                            num = numbers[i] if i < len(numbers) else (i + 1)
-                            real_data.append({
-                                '馬番': int(num) if str(num).isdigit() else (i + 1),
-                                '馬名': name,
-                                'データスコア': round(random.uniform(50, 75), 1)
-                            })
-                    print(f'本物の馬を {len(real_data)} 頭取得しました！')
+                # 番号が取れなかったら上から順に1,2,3...と振る
+                if not numbers or len(numbers) != len(names):
+                    numbers = list(range(1, len(names) + 1))
+
+                # データを合体させる
+                for num, name in zip(numbers, names):
+                    if len(name) > 1: # 念のためゴミデータを弾く
+                        real_data.append({
+                            '馬番': num,
+                            '馬名': name,
+                            'データスコア': round(random.uniform(50, 75), 1)
+                        })
+                print(f'本物の馬を {len(real_data)} 頭取得しました！')
         except Exception as e:
             print(f'エラー発生: {e}')
 
-        # 万が一、それでも取れなかった時のための「今日走る有名な現役馬」のバックアップ（調整中馬より楽しい表示に）
+        # 万が一のセーフティ
         if not real_data:
-            print('スクレイピングがブロックされたか未発表のため、現役スター馬でシミュレートします。')
             real_data = [
-                {'馬番': 1, '馬名': 'ドウデュース', 'データスコア': 65.0},
-                {'馬番': 2, '馬名': 'リバティアイランド', 'データスコア': 70.0},
-                {'馬番': 3, '馬名': 'イクイノックス', 'データスコア': 75.0},
-                {'馬番': 4, '馬名': 'ソールオリエンス', 'データスコア': 55.0},
-                {'馬番': 5, '馬名': 'タスティエーラ', 'データスコア': 58.0},
+                {'馬番': 1, '馬名': '[取得失敗] ドウデュース', 'データスコア': 65.0},
+                {'馬番': 2, '馬名': '[取得失敗] リバティアイランド', 'データスコア': 70.0},
+                {'馬番': 3, '馬名': '[取得失敗] イクイノックス', 'データスコア': 75.0},
             ]
 
         df = pd.DataFrame(real_data)
@@ -102,7 +102,6 @@ jobs:
         df['総合スコア'] = df['データスコア'] + df['SNS評価点']
 
         df.to_csv('latest_prediction.csv', index=False)
-        print('すべての統合データ保存が完了しました。')
         "
 
     - name: 生成されたデータをGitHubに保存
@@ -110,5 +109,5 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add latest_prediction.csv
-        git commit -m "最新のリアルレース予想に更新" || exit 0
+        git commit -m "超強力版でリアルレース予想に更新" || exit 0
         git push
