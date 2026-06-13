@@ -19,7 +19,7 @@ jobs:
     - name: 必要な道具をインストール
       run: pip install requests beautifulsoup4 pandas lxml
 
-    - name: netkeibaとSNSから本物のデータを執念で取得
+    - name: netkeibaから出馬表の馬だけをぴったり正確に取得
       run: |
         python -c "
         import requests
@@ -43,7 +43,7 @@ jobs:
 
             if race_ids:
                 race_ids = list(dict.fromkeys(race_ids))
-                target_race_id = race_ids[-1]
+                target_race_id = race_ids[-1] # メインレース等のID
                 target_url = f'https://race.netkeiba.com/race/shutuba.html?race_id={target_race_id}'
                 
                 print(f'ターゲットURL: {target_url}')
@@ -51,38 +51,29 @@ jobs:
                 res_race.encoding = 'euc-jp'
                 soup_race = BeautifulSoup(res_race.text, 'html.parser')
                 
-                # 【修正ポイント】見出しの「馬名」という文字を絶対に排除する
-                names = []
-                for span in soup_race.find_all('span', class_='HorseName'):
-                    txt = span.text.strip()
-                    if txt and txt != '馬名' and len(txt) > 1: 
-                        names.append(txt)
+                # 【修正ポイント】ページ全体ではなく「出馬表の行（HorseList）」だけを狙い撃ちする！
+                horse_rows = soup_race.find_all('tr', class_='HorseList')
                 
-                if not names:
-                    for td in soup_race.find_all('td', class_='Horse_Name'):
-                        txt = td.text.strip()
-                        if txt and txt != '馬名' and len(txt) > 1:
-                            names.append(txt)
-                
-                # 馬番の取得
-                numbers = []
-                for td in soup_race.find_all('td', class_=re.compile(r'(Umaban|Num)')):
-                    txt = td.text.strip()
-                    if txt.isdigit(): 
-                        numbers.append(int(txt))
-                
-                # 万が一、馬番と馬名の数が合わなければ、1から順番に綺麗に振り直す
-                if not numbers or len(numbers) != len(names):
-                    numbers = list(range(1, len(names) + 1))
-
-                # データをズレなく合体させる
-                for num, name in zip(numbers, names):
-                    real_data.append({
-                        '馬番': num,
-                        '馬名': name,
-                        'データスコア': round(random.uniform(50, 75), 1)
-                    })
-                print(f'本物の馬を {len(real_data)} 頭、ズレなしで取得しました！')
+                for row in horse_rows:
+                    # その行の中にある馬名を探す
+                    name_tag = row.find('span', class_='HorseName')
+                    if not name_tag:
+                        name_tag = row.find('td', class_='Horse_Name')
+                    name = name_tag.text.strip() if name_tag else ''
+                    
+                    # その行の中にある馬番を探す
+                    num_tag = row.find('td', class_=re.compile(r'(Umaban|Num)'))
+                    num_text = num_tag.text.strip() if num_tag else ''
+                    
+                    # ゴミデータじゃなければ正式な出走馬として追加
+                    if name and name != '馬名':
+                        real_data.append({
+                            '馬番': int(num_text) if num_text.isdigit() else len(real_data) + 1,
+                            '馬名': name,
+                            'データスコア': round(random.uniform(50, 75), 1)
+                        })
+                        
+                print(f'本物の馬をぴったり {len(real_data)} 頭取得しました！')
         except Exception as e:
             print(f'エラー発生: {e}')
 
@@ -113,5 +104,5 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add latest_prediction.csv
-        git commit -m "馬名ズレ修正完了版に更新" || exit 0
+        git commit -m "出走頭数ぴったり修正版に更新" || exit 0
         git push
